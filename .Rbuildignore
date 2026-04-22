@@ -1,3 +1,6 @@
 ^gopherDen\.Rproj$
 ^\.Rproj\.user$
 ^LICENSE\.md$
+^\.claude$
+^data-raw$
+^temp\.R$

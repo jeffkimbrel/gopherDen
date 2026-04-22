@@ -1,10 +1,23 @@
 Package: gopherDen
-Title: What the Package Does (One Line, Title Case)
-Version: 0.0.1
-Authors@R: 
-    person("First", "Last", , "first.last@example.com", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
+Title: Example Template for gopheR-Based Projects
+Version: 0.1.0
+Authors@R:
+    person("Jeff", "Kimbrel", , "jeff.kimbrel@example.com", role = c("aut", "cre"))
+Description: A GitHub template repository providing a working example of how to
+    build domain-specific applications using the gopheR framework. Includes
+    example metagenomic/MAG data, Excel bundles, and helper functions that can
+    be customized for any domain.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 7.3.3
+Imports:
+    gopheR,
+    cli
+Remotes:
+    jeffkimbrel/gopheR
+Suggests:
+    DBI,
+    RSQLite,
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3
