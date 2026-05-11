@@ -1,0 +1,132 @@
+---
+title: "gopherDen Database Browser"
+subtitle: "Genomic Objects & Provenance for Environmental Research"
+date: today
+format: html
+---
+
+```{r setup}
+library(tidyverse)
+library(gopheR)
+library(knitr)
+
+# Set database path - navigate up from quarto directory
+db_path <- normalizePath(file.path("..", "extdata"))
+options(gopheR.db_path = db_path)
+options(gopheR.db_file = "gopherDen_db.sqlite")
+```
+
+## Database Summary
+
+This database contains genomic and environmental data organized using the gopheR framework. Objects are connected through defined relationships (edges) to track provenance and relationships.
+
+```{r object-counts}
+# Get object counts by type
+object_counts <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      object_type,
+      COUNT(*) as count
+    FROM object
+    GROUP BY object_type
+    ORDER BY object_type
+  ")
+})
+
+kable(object_counts,
+      col.names = c("Object Type", "Count"),
+      caption = "Objects in Database")
+```
+
+```{r edge-counts}
+# Get edge counts by type
+edge_counts <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      edge_type,
+      COUNT(*) as count
+    FROM edge
+    GROUP BY edge_type
+    ORDER BY edge_type
+  ")
+})
+
+kable(edge_counts,
+      col.names = c("Edge Type", "Count"),
+      caption = "Relationships in Database")
+```
+
+## Study Sites
+
+```{r site-map}
+# Get site information
+sites <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      object_id as site_id,
+      label,
+      description
+    FROM object
+    WHERE object_type = 'site'
+  ")
+})
+
+# Try to extract lat/long from description
+# Format: "Description, 35.9641°N 84.2853°W, elevation..."
+sites <- sites |>
+  mutate(
+    # Extract latitude
+    lat = str_extract(description, "\\d+\\.\\d+°N") |>
+      str_remove("°N") |>
+      as.numeric(),
+    # Extract longitude (as negative for W)
+    lon = str_extract(description, "\\d+\\.\\d+°W") |>
+      str_remove("°W") |>
+      as.numeric() |>
+      (\(x) -x)()  # Convert West to negative
+  )
+
+# Check if we have valid coordinates
+if (any(!is.na(sites$lat) & !is.na(sites$lon))) {
+  library(leaflet)
+
+  leaflet(sites) |>
+    addProviderTiles(providers$CartoDB.Positron) |>
+    addCircleMarkers(
+      lng = ~lon,
+      lat = ~lat,
+      radius = 8,
+      color = "#2c7fb8",
+      fillOpacity = 0.7,
+      popup = ~paste0("<strong>", label, "</strong><br>", site_id)
+    )
+} else {
+  cat("No site coordinates available for mapping.")
+}
+```
+
+## Quick Stats
+
+```{r quick-stats}
+# Get some interesting stats
+stats <- gopheR::with_gopher_con(function(con) {
+  list(
+    total_objects = DBI::dbGetQuery(con, "SELECT COUNT(*) as n FROM object")$n,
+    total_edges = DBI::dbGetQuery(con, "SELECT COUNT(*) as n FROM edge")$n,
+    total_workflows = DBI::dbGetQuery(con, "SELECT COUNT(*) as n FROM workflow")$n,
+    total_results = DBI::dbGetQuery(con, "SELECT COUNT(*) as n FROM result")$n
+  )
+})
+
+tibble(
+  Metric = c("Total Objects", "Total Edges", "Total Workflows", "Total Results"),
+  Count = c(stats$total_objects, stats$total_edges, stats$total_workflows, stats$total_results)
+) |>
+  kable()
+```
+
+## Explore Further
+
+- [MAGs](mags.html) - Browse metagenomic assembled genomes
+- [Samples](samples.html) - View environmental samples
+- [Assemblies](assemblies.html) - Explore assembly statistics

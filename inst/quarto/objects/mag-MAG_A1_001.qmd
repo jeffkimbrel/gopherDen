@@ -1,0 +1,269 @@
+---
+title: "MAG Detail: MAG_A1_001"
+date: today
+format: html
+params:
+  mag_id: "MAG_A1_001"
+---
+
+```{r setup}
+library(tidyverse)
+library(gopheR)
+library(knitr)
+library(reactable)
+
+# Set database path
+db_path <- normalizePath(file.path("..", "..", "extdata"))
+options(gopheR.db_path = db_path)
+options(gopheR.db_file = "gopherDen_db.sqlite")
+
+mag_id <- params$mag_id
+```
+
+## MAG Metadata
+
+```{r mag-metadata}
+mag <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      object_id,
+      object_type,
+      object_subtype,
+      label,
+      description,
+      created_at,
+      created_by
+    FROM object
+    WHERE object_id = ?
+  ", params = list(mag_id))
+})
+
+kable(
+  mag |> pivot_longer(everything(), names_to = "Field", values_to = "Value"),
+  col.names = c("Field", "Value")
+)
+```
+
+## Quality Metrics - Historical
+
+This table shows ALL quality assessments for this MAG over time. The most recent assessment is at the top.
+
+```{r quality-history}
+quality_results <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      r.key,
+      r.value,
+      r.workflow_id,
+      w.description as workflow_description,
+      w.workflow_date,
+      w.created_by
+    FROM result r
+    JOIN workflow w ON w.workflow_id = r.workflow_id
+    WHERE r.object_id = ?
+      AND r.key IN ('completeness', 'contamination', 'size_bp', 'gc_content', 'N50', 'n_contigs')
+    ORDER BY r.key, w.workflow_date DESC
+  ", params = list(mag_id))
+})
+
+if (nrow(quality_results) > 0) {
+  reactable(
+    quality_results,
+    groupBy = "key",
+    searchable = TRUE,
+    striped = TRUE,
+    defaultExpanded = TRUE,
+    columns = list(
+      key = colDef(name = "Metric", minWidth = 120),
+      value = colDef(name = "Value", minWidth = 100),
+      workflow_id = colDef(name = "Workflow ID", minWidth = 120),
+      workflow_date = colDef(name = "Date", minWidth = 120),
+      workflow_description = colDef(name = "Description", minWidth = 200),
+      created_by = colDef(name = "Analyst", minWidth = 100)
+    )
+  )
+} else {
+  cat("No quality metrics available for this MAG.")
+}
+```
+
+## Taxonomy - Historical
+
+This table shows ALL taxonomic classifications for this MAG over time. Taxonomy may change as reference databases are updated (e.g., GTDB releases).
+
+```{r taxonomy-history}
+taxonomy_results <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      r.value as taxonomy,
+      r.workflow_id,
+      w.description as workflow_description,
+      w.workflow_date,
+      w.created_by
+    FROM result r
+    JOIN workflow w ON w.workflow_id = r.workflow_id
+    WHERE r.object_id = ?
+      AND r.key = 'taxonomy'
+    ORDER BY w.workflow_date DESC
+  ", params = list(mag_id))
+})
+
+if (nrow(taxonomy_results) > 0) {
+  reactable(
+    taxonomy_results,
+    searchable = TRUE,
+    striped = TRUE,
+    highlight = TRUE,
+    columns = list(
+      taxonomy = colDef(name = "Taxonomy", minWidth = 300),
+      workflow_id = colDef(name = "Workflow ID", minWidth = 120),
+      workflow_date = colDef(name = "Date", minWidth = 120),
+      workflow_description = colDef(name = "Description", minWidth = 200),
+      created_by = colDef(name = "Analyst", minWidth = 100)
+    )
+  )
+} else {
+  cat("No taxonomy data available for this MAG.")
+}
+```
+
+## Current Best Values
+
+For quick reference, here are the MOST RECENT values:
+
+```{r current-values}
+current_results <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      r.key,
+      r.value,
+      w.workflow_date,
+      r.workflow_id
+    FROM result r
+    JOIN workflow w ON w.workflow_id = r.workflow_id
+    WHERE r.object_id = ?
+    ORDER BY r.key, w.workflow_date DESC
+  ", params = list(mag_id))
+})
+
+current_best <- current_results |>
+  group_by(key) |>
+  slice_max(workflow_date, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  select(key, value, workflow_date, workflow_id)
+
+kable(current_best,
+      col.names = c("Metric", "Value", "As of", "Workflow ID"))
+```
+
+## Provenance: Assembly & Readsets
+
+Shows how this MAG was created.
+
+```{r provenance}
+# Get binned_from relationship (MAG <- assembly)
+binned_from <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      e.parent_id as assembly_id,
+      o.label as assembly_label
+    FROM edge e
+    JOIN object o ON o.object_id = e.parent_id
+    WHERE e.child_id = ?
+      AND e.edge_type = 'binned_from'
+  ", params = list(mag_id))
+})
+
+if (nrow(binned_from) > 0) {
+  cat("### Binned From Assembly\n\n")
+  kable(binned_from, col.names = c("Assembly ID", "Label"))
+
+  assembly_id <- binned_from$assembly_id[1]
+
+  # Get readsets used for assembly (assembled_from)
+  assembled_from <- gopheR::with_gopher_con(function(con) {
+    DBI::dbGetQuery(con, "
+      SELECT
+        e.parent_id as readset_id,
+        o.label as readset_label
+      FROM edge e
+      JOIN object o ON o.object_id = e.parent_id
+      WHERE e.child_id = ?
+        AND e.edge_type = 'assembled_from'
+    ", params = list(assembly_id))
+  })
+
+  if (nrow(assembled_from) > 0) {
+    cat("\n### Assembly Built From Readsets\n\n")
+    kable(assembled_from, col.names = c("Readset ID", "Label"))
+  }
+}
+
+# Get binned_with relationship (MAG <- readsets for coverage)
+binned_with <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      e.parent_id as readset_id,
+      o.label as readset_label
+    FROM edge e
+    JOIN object o ON o.object_id = e.parent_id
+    WHERE e.child_id = ?
+      AND e.edge_type = 'binned_with'
+  ", params = list(mag_id))
+})
+
+if (nrow(binned_with) > 0) {
+  cat("\n### Binned Using Coverage From Readsets\n\n")
+  kable(binned_with, col.names = c("Readset ID", "Label"))
+}
+```
+
+## Observations: Where This MAG Was Found
+
+Shows which samples this MAG has been observed in (post-hoc detection).
+
+```{r observations}
+observations <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      e.parent_id as readset_id,
+      rs.label as readset_label
+    FROM edge e
+    JOIN object rs ON rs.object_id = e.parent_id
+    WHERE e.child_id = ?
+      AND e.edge_type = 'observed_in'
+  ", params = list(mag_id))
+})
+
+if (nrow(observations) > 0) {
+  kable(observations, col.names = c("Readset ID", "Label"))
+} else {
+  cat("No observation data available (MAG not mapped to other samples).")
+}
+```
+
+## Files
+
+All files associated with this MAG.
+
+```{r files}
+files <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      file_role,
+      file_path,
+      file_format,
+      checksum,
+      workflow_id
+    FROM object_file
+    WHERE object_id = ?
+    ORDER BY file_role
+  ", params = list(mag_id))
+})
+
+if (nrow(files) > 0) {
+  kable(files)
+} else {
+  cat("No files registered for this MAG.")
+}
+```

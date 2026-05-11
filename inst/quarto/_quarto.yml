@@ -1,0 +1,34 @@
+project:
+  type: website
+  output-dir: _site
+
+website:
+  title: "gopherDen"
+  navbar:
+    background: primary
+    left:
+      - text: "Home"
+        href: index.html
+      - text: "MAGs"
+        href: mags.html
+      - text: "Samples"
+        href: samples.html
+      - text: "Assemblies"
+        href: assemblies.html
+  page-footer:
+    left: "Built with [gopheR](https://github.com/jeffkimbrel/gopheR)"
+    right: "Genomic Objects & Provenance for Environmental Research"
+
+format:
+  html:
+    theme: flatly
+    toc: true
+    toc-depth: 3
+    code-fold: false
+    code-tools: false
+    embed-resources: false
+
+execute:
+  warning: false
+  message: false
+  echo: false

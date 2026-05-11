@@ -10,12 +10,12 @@ This template includes:
 
 - ✅ **Populated example database** (`inst/extdata/gopherDen_db.sqlite`) with realistic MAG data
 - ✅ **Example Excel bundle** (`inst/extdata/example_bundle.xlsx`) showing data entry patterns
-- ✅ **Helper functions** ([R/setup.R](R/setup.R)) for creating new databases
+- ✅ **Quarto report templates** (`inst/quarto/`) - Static HTML dashboards for browsing your data
+- ✅ **Helper functions** ([R/setup.R](R/setup.R), [R/render_site.R](R/render_site.R)) for database setup and reporting
 - ✅ **Tests** ([tests/testthat/](tests/testthat/)) ensuring helper functions work correctly
 - ✅ **Reproducible data generation** (`data-raw/`) showing how the example was created
-- 🚧 **Quarto report templates** (coming soon)
-- 🚧 **Shiny data explorer** (coming soon)
-- 🚧 **Domain-specific query functions** (coming soon)
+- 🚧 **Shiny data explorer** (planned)
+- 🚧 **LLM-powered query interface** (planned)
 
 ## Quick Start
 
@@ -415,6 +415,50 @@ Complete relationships tracked via edges:
 - Readsets → Samples (sequenced_from)
 - Assemblies → Readsets (assembled_from)
 - MAGs → Assemblies (binned_from)
+
+## Generating Reports
+
+gopherDen includes Quarto templates for creating static HTML dashboards from your database. These are fully static (no server needed) and can be emailed or shared via any web hosting.
+
+### Render the Site
+
+```r
+# Load project functions
+devtools::load_all()
+
+# Render all Quarto pages to HTML
+render_site()
+
+# Open the site in your browser
+view_site()
+```
+
+The rendered site includes:
+- **Landing page** - Database summary, object/edge counts, site map
+- **Object type pages** - MAGs, samples, assemblies with searchable tables
+- **Detail pages** - Individual object pages showing all historical data
+
+### What Gets Rendered
+
+```
+inst/quarto/_site/
+├── index.html              # Main landing page
+├── mags.html              # MAG overview (most recent data)
+├── samples.html           # Sample overview
+├── assemblies.html        # Assembly overview
+└── objects/
+    └── mag-MAG_A1_001.html  # Example MAG detail (all historical data)
+```
+
+**Key Feature:** Landing pages show the **most recent** result values (latest workflow_date), while detail pages show **all historical** data (e.g., taxonomy from different GTDB versions, quality assessments over time).
+
+### Customizing Reports
+
+See [inst/quarto/README.md](inst/quarto/README.md) for:
+- Adding new pages
+- Customizing visualizations
+- Handling historical data
+- Database connection patterns
 
 ## Workflow Example: Adding New Data
 

@@ -1,0 +1,274 @@
+---
+title: "Metagenome-Assembled Genomes (MAGs)"
+date: today
+format: html
+---
+
+```{r setup}
+library(tidyverse)
+library(gopheR)
+library(knitr)
+library(reactable)
+
+# Set database path
+db_path <- normalizePath(file.path("..", "extdata"))
+options(gopheR.db_path = db_path)
+options(gopheR.db_file = "gopherDen_db.sqlite")
+```
+
+## MAG Overview
+
+This page shows all metagenome-assembled genomes (MAGs) in the database with their quality metrics and taxonomy. For detailed historical data, see example detail pages:
+
+- [MAG_A1_001 Detail Page](objects/mag-MAG_A1_001.html) - Shows all historical quality assessments, taxonomy updates, provenance, and files
+
+```{r mag-data}
+# Get all MAGs with their quality metrics
+mags <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      o.object_id,
+      o.label,
+      o.description,
+      o.created_at
+    FROM object o
+    WHERE o.object_type = 'genome'
+      AND o.object_subtype = 'MAG'
+    ORDER BY o.object_id
+  ")
+})
+
+# Get MOST RECENT result data for MAGs (join with workflow to get dates)
+results <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      r.object_id,
+      r.key,
+      r.value,
+      r.workflow_id,
+      w.workflow_date
+    FROM result r
+    JOIN workflow w ON w.workflow_id = r.workflow_id
+    WHERE r.object_id LIKE 'MAG%'
+    ORDER BY r.object_id, r.key, w.workflow_date DESC
+  ")
+})
+
+# For landing page, keep only the MOST RECENT value per object_id + key
+results_latest <- results |>
+  group_by(object_id, key) |>
+  slice_max(workflow_date, n = 1, with_ties = FALSE) |>
+  ungroup()
+
+# Pivot results wide
+results_wide <- results_latest |>
+  select(object_id, key, value) |>
+  pivot_wider(
+    names_from = key,
+    values_from = value
+  )
+
+# Join with MAG metadata
+mags_full <- mags |>
+  left_join(results_wide, by = "object_id")
+```
+
+## MAG Quality Summary
+
+```{r mag-table}
+# Only convert numeric columns that exist
+mags_display <- mags_full
+if ("completeness" %in% colnames(mags_display)) {
+  mags_display <- mags_display |> mutate(completeness = as.numeric(completeness))
+}
+if ("contamination" %in% colnames(mags_display)) {
+  mags_display <- mags_display |> mutate(contamination = as.numeric(contamination))
+}
+if ("size_bp" %in% colnames(mags_display)) {
+  mags_display <- mags_display |> mutate(size_bp = as.numeric(size_bp))
+}
+if ("gc_content" %in% colnames(mags_display)) {
+  mags_display <- mags_display |> mutate(gc_content = as.numeric(gc_content))
+}
+if ("n_contigs" %in% colnames(mags_display)) {
+  mags_display <- mags_display |> mutate(n_contigs = as.numeric(n_contigs))
+}
+if ("N50" %in% colnames(mags_display)) {
+  mags_display <- mags_display |> mutate(N50 = as.numeric(N50))
+}
+
+# Select only columns that exist
+select_cols <- c("object_id", "label")
+if ("completeness" %in% colnames(mags_display)) select_cols <- c(select_cols, "completeness")
+if ("contamination" %in% colnames(mags_display)) select_cols <- c(select_cols, "contamination")
+if ("size_bp" %in% colnames(mags_display)) select_cols <- c(select_cols, "size_bp")
+if ("n_contigs" %in% colnames(mags_display)) select_cols <- c(select_cols, "n_contigs")
+if ("N50" %in% colnames(mags_display)) select_cols <- c(select_cols, "N50")
+if ("gc_content" %in% colnames(mags_display)) select_cols <- c(select_cols, "gc_content")
+if ("taxonomy" %in% colnames(mags_display)) select_cols <- c(select_cols, "taxonomy")
+
+mags_display <- mags_display |> select(all_of(select_cols))
+
+# Build column definitions dynamically
+col_defs <- list(
+  object_id = colDef(name = "MAG ID", minWidth = 120),
+  label = colDef(name = "Label", minWidth = 150)
+)
+
+if ("completeness" %in% colnames(mags_display)) {
+  col_defs$completeness <- colDef(
+    name = "Completeness (%)",
+    format = colFormat(digits = 1),
+    style = function(value) {
+      if (!is.na(value) && value >= 90) {
+        list(color = "#008000", fontWeight = "bold")
+      } else if (!is.na(value) && value >= 50) {
+        list(color = "#ff8c00")
+      } else {
+        list(color = "#999")
+      }
+    }
+  )
+}
+
+if ("contamination" %in% colnames(mags_display)) {
+  col_defs$contamination <- colDef(
+    name = "Contamination (%)",
+    format = colFormat(digits = 1),
+    style = function(value) {
+      if (!is.na(value) && value <= 5) {
+        list(color = "#008000")
+      } else if (!is.na(value) && value <= 10) {
+        list(color = "#ff8c00")
+      } else {
+        list(color = "#d32f2f", fontWeight = "bold")
+      }
+    }
+  )
+}
+
+if ("size_bp" %in% colnames(mags_display)) {
+  col_defs$size_bp <- colDef(
+    name = "Size (bp)",
+    format = colFormat(separators = TRUE, digits = 0)
+  )
+}
+
+if ("n_contigs" %in% colnames(mags_display)) {
+  col_defs$n_contigs <- colDef(name = "Contigs", format = colFormat(digits = 0))
+}
+
+if ("N50" %in% colnames(mags_display)) {
+  col_defs$N50 <- colDef(name = "N50", format = colFormat(separators = TRUE, digits = 0))
+}
+
+if ("gc_content" %in% colnames(mags_display)) {
+  col_defs$gc_content <- colDef(name = "GC %", format = colFormat(digits = 1))
+}
+
+if ("taxonomy" %in% colnames(mags_display)) {
+  col_defs$taxonomy <- colDef(name = "Taxonomy", minWidth = 200)
+}
+
+reactable(
+  mags_display,
+  searchable = TRUE,
+  filterable = TRUE,
+  striped = TRUE,
+  highlight = TRUE,
+  defaultPageSize = 20,
+  columns = col_defs
+)
+```
+
+## Quality Distribution
+
+```{r quality-plot}
+mags_full |>
+  mutate(
+    completeness = as.numeric(completeness),
+    contamination = as.numeric(contamination)
+  ) |>
+  filter(!is.na(completeness), !is.na(contamination)) |>
+  ggplot(aes(x = completeness, y = contamination)) +
+  geom_point(size = 3, alpha = 0.7, color = "#2c7fb8") +
+  geom_hline(yintercept = 5, linetype = "dashed", color = "darkgreen", alpha = 0.5) +
+  geom_hline(yintercept = 10, linetype = "dashed", color = "orange", alpha = 0.5) +
+  geom_vline(xintercept = 90, linetype = "dashed", color = "darkgreen", alpha = 0.5) +
+  geom_vline(xintercept = 50, linetype = "dashed", color = "orange", alpha = 0.5) +
+  annotate("text", x = 95, y = 2, label = "High-quality", color = "darkgreen", hjust = 0) +
+  annotate("text", x = 70, y = 7, label = "Medium-quality", color = "orange") +
+  labs(
+    title = "MAG Quality Assessment",
+    subtitle = "Based on completeness and contamination",
+    x = "Completeness (%)",
+    y = "Contamination (%)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 14, face = "bold"),
+    plot.subtitle = element_text(size = 11, color = "gray40")
+  )
+```
+
+## Size Distribution
+
+```{r size-histogram}
+mags_full |>
+  mutate(size_mb = as.numeric(size_bp) / 1e6) |>
+  filter(!is.na(size_mb)) |>
+  ggplot(aes(x = size_mb)) +
+  geom_histogram(bins = 20, fill = "#2c7fb8", alpha = 0.7, color = "white") +
+  labs(
+    title = "MAG Genome Size Distribution",
+    x = "Genome Size (Mb)",
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+```
+
+## Taxonomy Overview
+
+```{r taxonomy-summary}
+mags_full |>
+  filter(!is.na(taxonomy)) |>
+  separate(taxonomy, into = c("domain", "phylum", "class", "order", "family", "genus", "species"),
+           sep = ";", fill = "right", extra = "drop") |>
+  mutate(phylum = str_trim(phylum)) |>
+  count(phylum, sort = TRUE) |>
+  filter(!is.na(phylum)) |>
+  ggplot(aes(x = reorder(phylum, n), y = n)) +
+  geom_col(fill = "#2c7fb8", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "MAGs by Phylum",
+    x = NULL,
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+```
+
+## Summary Statistics
+
+```{r summary-stats}
+summary_stats <- mags_full |>
+  summarise(
+    `Total MAGs` = n(),
+    `High-quality (>90% complete, <5% contam)` = sum(
+      as.numeric(completeness) > 90 & as.numeric(contamination) < 5, na.rm = TRUE
+    ),
+    `Medium-quality (>50% complete, <10% contam)` = sum(
+      as.numeric(completeness) > 50 & as.numeric(completeness) <= 90 &
+      as.numeric(contamination) < 10, na.rm = TRUE
+    ),
+    `Mean Completeness (%)` = round(mean(as.numeric(completeness), na.rm = TRUE), 1),
+    `Mean Contamination (%)` = round(mean(as.numeric(contamination), na.rm = TRUE), 1),
+    `Mean Size (Mb)` = round(mean(as.numeric(size_bp), na.rm = TRUE) / 1e6, 2)
+  )
+
+summary_stats |>
+  pivot_longer(everything(), names_to = "Metric", values_to = "Value") |>
+  kable()
+```

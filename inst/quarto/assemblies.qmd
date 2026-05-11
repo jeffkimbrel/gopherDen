@@ -1,0 +1,239 @@
+---
+title: "Metagenome Assemblies"
+date: today
+format: html
+---
+
+```{r setup}
+library(tidyverse)
+library(gopheR)
+library(knitr)
+library(reactable)
+
+# Set database path
+db_path <- normalizePath(file.path("..", "extdata"))
+options(gopheR.db_path = db_path)
+options(gopheR.db_file = "gopherDen_db.sqlite")
+```
+
+## Assembly Overview
+
+This page shows all metagenome assemblies in the database with their statistics and provenance.
+
+```{r assembly-data}
+# Get all assemblies
+assemblies <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      o.object_id,
+      o.object_subtype,
+      o.label,
+      o.description,
+      o.created_at
+    FROM object o
+    WHERE o.object_type = 'assembly'
+    ORDER BY o.object_id
+  ")
+})
+
+# Get assembly statistics from results
+assembly_results <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      r.object_id,
+      r.key,
+      r.value
+    FROM result r
+    WHERE r.object_id IN (
+      SELECT object_id FROM object WHERE object_type = 'assembly'
+    )
+  ")
+})
+
+# Pivot results wide
+if (nrow(assembly_results) > 0) {
+  assembly_results_wide <- assembly_results |>
+    pivot_wider(
+      names_from = key,
+      values_from = value,
+      values_fn = first
+    )
+
+  assemblies_full <- assemblies |>
+    left_join(assembly_results_wide, by = "object_id")
+} else {
+  assemblies_full <- assemblies
+}
+```
+
+## Assembly Table
+
+```{r assembly-table}
+# Only mutate columns that exist
+if ("size_bp" %in% colnames(assemblies_full)) {
+  assemblies_display <- assemblies_full |>
+    mutate(
+      size_bp = as.numeric(size_bp),
+      n_contigs = as.numeric(n_contigs),
+      N50 = as.numeric(N50),
+      gc_content = as.numeric(gc_content)
+    )
+} else {
+  assemblies_display <- assemblies_full
+}
+
+# Build column definitions dynamically
+col_defs <- list(
+  object_id = colDef(name = "Assembly ID", minWidth = 120),
+  object_subtype = colDef(name = "Type", minWidth = 120),
+  label = colDef(name = "Label", minWidth = 150),
+  description = colDef(name = "Description", minWidth = 200),
+  created_at = colDef(name = "Created", minWidth = 180)
+)
+
+# Add optional columns if they exist
+if ("size_bp" %in% colnames(assemblies_display)) {
+  col_defs$size_bp <- colDef(
+    name = "Size (bp)",
+    format = colFormat(separators = TRUE, digits = 0)
+  )
+}
+if ("n_contigs" %in% colnames(assemblies_display)) {
+  col_defs$n_contigs <- colDef(name = "Contigs", format = colFormat(digits = 0))
+}
+if ("N50" %in% colnames(assemblies_display)) {
+  col_defs$N50 <- colDef(name = "N50", format = colFormat(separators = TRUE, digits = 0))
+}
+if ("gc_content" %in% colnames(assemblies_display)) {
+  col_defs$gc_content <- colDef(name = "GC %", format = colFormat(digits = 1))
+}
+
+reactable(
+  assemblies_display,
+  searchable = TRUE,
+  filterable = TRUE,
+  striped = TRUE,
+  highlight = TRUE,
+  defaultPageSize = 20,
+  columns = col_defs
+)
+```
+
+## Assembly Provenance
+
+```{r assembly-provenance}
+# Get readsets used for each assembly
+assembly_readsets <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      e.child_id as assembly_id,
+      e.parent_id as readset_id
+    FROM edge e
+    WHERE e.edge_type = 'assembled_from'
+      AND e.child_id IN (
+        SELECT object_id FROM object WHERE object_type = 'assembly'
+      )
+  ")
+})
+
+# Count readsets per assembly
+assembly_readset_counts <- assembly_readsets |>
+  count(assembly_id, name = "n_readsets")
+
+# Get MAGs binned from each assembly
+assembly_mags <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      e.parent_id as assembly_id,
+      COUNT(DISTINCT e.child_id) as n_mags
+    FROM edge e
+    WHERE e.edge_type = 'binned_from'
+      AND e.parent_id IN (
+        SELECT object_id FROM object WHERE object_type = 'assembly'
+      )
+    GROUP BY e.parent_id
+  ")
+})
+
+# Combine
+assembly_summary <- assemblies |>
+  left_join(assembly_readset_counts, by = c("object_id" = "assembly_id")) |>
+  left_join(assembly_mags, by = c("object_id" = "assembly_id")) |>
+  replace_na(list(n_readsets = 0, n_mags = 0)) |>
+  select(object_id, label, n_readsets, n_mags)
+
+kable(assembly_summary,
+      col.names = c("Assembly ID", "Label", "Readsets Used", "MAGs Binned"),
+      caption = "Assembly connections to other objects")
+```
+
+## Assembly Statistics
+
+```{r assembly-stats}
+if ("size_bp" %in% colnames(assemblies_full)) {
+  assemblies_full |>
+    mutate(size_mb = as.numeric(size_bp) / 1e6) |>
+    filter(!is.na(size_mb)) |>
+    ggplot(aes(x = size_mb)) +
+    geom_histogram(bins = 15, fill = "#2c7fb8", alpha = 0.7, color = "white") +
+    labs(
+      title = "Assembly Size Distribution",
+      x = "Assembly Size (Mb)",
+      y = "Count"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 14, face = "bold"))
+} else {
+  cat("No assembly size data available.")
+}
+```
+
+## Contig Statistics
+
+```{r contig-stats}
+if ("n_contigs" %in% colnames(assemblies_full) && "N50" %in% colnames(assemblies_full)) {
+  assemblies_full |>
+    mutate(
+      n_contigs = as.numeric(n_contigs),
+      N50 = as.numeric(N50)
+    ) |>
+    filter(!is.na(n_contigs), !is.na(N50)) |>
+    ggplot(aes(x = n_contigs, y = N50)) +
+    geom_point(size = 3, alpha = 0.7, color = "#2c7fb8") +
+    scale_y_log10(labels = scales::comma) +
+    scale_x_log10(labels = scales::comma) +
+    labs(
+      title = "Assembly Quality: N50 vs Number of Contigs",
+      subtitle = "Higher N50 and fewer contigs indicate better assembly",
+      x = "Number of Contigs (log scale)",
+      y = "N50 (log scale)"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 11, color = "gray40")
+    )
+} else {
+  cat("No contig statistics available.")
+}
+```
+
+## MAGs per Assembly
+
+```{r mags-per-assembly}
+if (nrow(assembly_mags) > 0) {
+  assembly_mags |>
+    ggplot(aes(x = reorder(assembly_id, n_mags), y = n_mags)) +
+    geom_col(fill = "#2c7fb8", alpha = 0.8) +
+    coord_flip() +
+    labs(
+      title = "MAGs Binned per Assembly",
+      x = NULL,
+      y = "Number of MAGs"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 14, face = "bold"))
+} else {
+  cat("No MAG binning data available.")
+}
+```

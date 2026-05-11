@@ -1,0 +1,186 @@
+---
+title: "Environmental Samples"
+date: today
+format: html
+---
+
+```{r setup}
+library(tidyverse)
+library(gopheR)
+library(knitr)
+library(reactable)
+
+# Set database path
+db_path <- normalizePath(file.path("..", "extdata"))
+options(gopheR.db_path = db_path)
+options(gopheR.db_file = "gopherDen_db.sqlite")
+```
+
+## Sample Overview
+
+This page shows all environmental samples in the database and their associated metadata.
+
+```{r sample-data}
+# Get all samples
+samples <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      o.object_id,
+      o.object_subtype,
+      o.label,
+      o.description,
+      o.created_at
+    FROM object o
+    WHERE o.object_type = 'sample'
+    ORDER BY o.object_id
+  ")
+})
+
+# Get site information for each sample via edges
+sample_sites <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      e.child_id as sample_id,
+      e.parent_id as site_id,
+      s.label as site_label
+    FROM edge e
+    JOIN object s ON s.object_id = e.parent_id
+    WHERE e.edge_type = 'part_of'
+      AND e.parent_id LIKE 'site_%'
+      AND e.child_id LIKE 'sample_%'
+  ")
+})
+
+# Get any result data for samples
+sample_results <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      r.object_id as sample_id,
+      r.key,
+      r.value
+    FROM result r
+    WHERE r.object_id LIKE 'sample_%'
+  ")
+})
+
+# Join samples with sites
+samples_full <- samples |>
+  left_join(sample_sites, by = c("object_id" = "sample_id"))
+
+# Pivot result data if available
+if (nrow(sample_results) > 0) {
+  sample_results_wide <- sample_results |>
+    pivot_wider(
+      names_from = key,
+      values_from = value,
+      values_fn = first
+    )
+
+  samples_full <- samples_full |>
+    left_join(sample_results_wide, by = c("object_id" = "sample_id"))
+}
+```
+
+## Sample Table
+
+```{r sample-table}
+reactable(
+  samples_full,
+  searchable = TRUE,
+  filterable = TRUE,
+  striped = TRUE,
+  highlight = TRUE,
+  defaultPageSize = 20,
+  columns = list(
+    object_id = colDef(name = "Sample ID", minWidth = 120),
+    object_subtype = colDef(name = "Type", minWidth = 100),
+    label = colDef(name = "Label", minWidth = 150),
+    description = colDef(name = "Description", minWidth = 250),
+    site_id = colDef(name = "Site ID", minWidth = 100),
+    site_label = colDef(name = "Site", minWidth = 150),
+    created_at = colDef(name = "Created", minWidth = 180)
+  )
+)
+```
+
+## Sample Provenance
+
+This section shows how samples connect to other objects in the database.
+
+```{r sample-connections}
+# Get readsets from samples
+sample_readsets <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      e.parent_id as sample_id,
+      COUNT(DISTINCT e.child_id) as n_readsets
+    FROM edge e
+    WHERE e.edge_type = 'sequenced_from'
+      AND e.parent_id LIKE 'sample_%'
+    GROUP BY e.parent_id
+  ")
+})
+
+# Get MAGs observed in samples (via readsets)
+sample_mags <- gopheR::with_gopher_con(function(con) {
+  DBI::dbGetQuery(con, "
+    SELECT
+      rs.parent_id as sample_id,
+      COUNT(DISTINCT obs.child_id) as n_mags_observed
+    FROM edge rs
+    JOIN edge obs ON obs.parent_id = rs.child_id
+    WHERE rs.edge_type = 'sequenced_from'
+      AND rs.parent_id LIKE 'sample_%'
+      AND obs.edge_type = 'observed_in'
+      AND obs.child_id LIKE 'MAG%'
+    GROUP BY rs.parent_id
+  ")
+})
+
+# Combine
+sample_summary <- samples |>
+  left_join(sample_sites, by = c("object_id" = "sample_id")) |>
+  left_join(sample_readsets, by = c("object_id" = "sample_id")) |>
+  left_join(sample_mags, by = c("object_id" = "sample_id")) |>
+  replace_na(list(n_readsets = 0, n_mags_observed = 0)) |>
+  select(object_id, label, site_label, n_readsets, n_mags_observed)
+
+kable(sample_summary,
+      col.names = c("Sample ID", "Label", "Site", "Readsets", "MAGs Observed"),
+      caption = "Sample connections to other objects")
+```
+
+## Samples by Site
+
+```{r samples-by-site}
+samples_full |>
+  count(site_label) |>
+  filter(!is.na(site_label)) |>
+  ggplot(aes(x = reorder(site_label, n), y = n)) +
+  geom_col(fill = "#2c7fb8", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Samples per Site",
+    x = NULL,
+    y = "Number of Samples"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+```
+
+## Sample Types
+
+```{r sample-types}
+samples |>
+  count(object_subtype) |>
+  ggplot(aes(x = reorder(object_subtype, n), y = n)) +
+  geom_col(fill = "#2c7fb8", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "Samples by Type",
+    x = NULL,
+    y = "Count"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+```
