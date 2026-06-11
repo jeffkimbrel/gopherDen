@@ -10,3 +10,4 @@ inst/extdata/blank_db.sqlite
 inst/extdata/backups/
 /inst/quarto/_site
 temp.R
+.positai
